@@ -296,6 +296,12 @@ export const Info = Schema.Struct({
       continue_loop_on_deny: Schema.optional(Schema.Boolean).annotate({
         description: "Continue the agent loop when a tool call is denied",
       }),
+     text_repetition_min_blocks: Schema.optional(NonNegativeInt).annotate({
+        description: "Minimum consecutive blocks needed to trigger detection (default: 3)",
+      }),
+      text_repetition_min_repeated_length: Schema.optional(PositiveInt).annotate({
+        description: "Minimum total length of repeated content required for detection (default: 2000)",
+      }),
       mcp_timeout: Schema.optional(PositiveInt).annotate({
         description: "Timeout in milliseconds for model context protocol (MCP) requests",
       }),
