@@ -1436,7 +1436,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const lastAssistantMsg = msgs.findLast(
             (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
           )
-          yield* elog.info("LAM: " +JSON.stringify( lastAssistantMsg))
           // Some providers return "stop" even when the assistant message contains tool calls.
           // Keep the loop running so tool results can be sent back to the model.
           // Skip provider-executed tool parts — those were fully handled within the
@@ -1450,37 +1449,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-
-            const responseText = (lastAssistantMsg?.parts ?? [])
-              .filter((p): p is MessageV2.TextPart => p.type === "text")
-              .map((p) => p.text)
-              .join("\n\n")
-              .trim()
-            if (/^done$/i.test(responseText)) {
-              yield* slog.info("exiting loop")
-              break
-            } else {
-              lastUser.tools = {}  // Clear tools so AI doesn't get confused by unrelated tool context
-              yield* elog.info("auto-restart", { type: "stop" })
-
-              const followUpMsg = yield* sessions.updateMessage({
-                id: MessageID.ascending(),
-                role: "user" as const,
-                sessionID,
-                agent: lastUser!.agent!,
-                model: { providerID: lastUser!.model!.providerID, modelID: lastUser!.model!.modelID },
-                time: { created: Date.now() },
-              })
-
-              yield* sessions.updatePart({
-                id: PartID.ascending(),
-                messageID: followUpMsg.id!,
-                sessionID,
-                type: "text",
-                text: "Reply with UNFORMATTED 'DONE' if your task is complete or you have no task assigned or you're waiting for user input; otherwise continue working.",
-              })
-              continue
-            }
+            yield* slog.info("exiting loop")
+            break
           }
 
           step++
