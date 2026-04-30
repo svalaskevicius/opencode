@@ -18,7 +18,6 @@ import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
 import type { Provider } from "@/provider/provider"
 import { Question } from "@/question"
-import { shouldRunRepetitionCheck, MIN_TEXT_LENGTH } from "./detect-repetition"
 import { errorMessage } from "@/util/error"
 import * as Log from "@opencode-ai/core/util/log"
 import { isRecord } from "@/util/record"
@@ -76,52 +75,12 @@ interface ProcessorContext extends Input {
   blocked: boolean
   needsCompaction: boolean
   currentText: MessageV2.TextPart | undefined
-  tokensSinceLastCheck: number
-  reasoningTokensSinceLastCheck: number
   reasoningMap: Record<string, MessageV2.ReasoningPart>
-}
-
-/** Unified detection: scan all periods against the last N characters for R consecutive matching blocks. */
-export function detectRepeatingPattern(
-  text: string,
-  minBlocks: number,
-  minRepeatedLength: number,
-): boolean {
-
-  if (text.length < Math.max(minBlocks * 2, 1)) return false
-  if (text.length < minRepeatedLength) return false
-
-  const maxPeriodLen = text.length / minBlocks
-
-  for (let period = 1; period <= text.length && period < maxPeriodLen; period++) {
-    let adjustedMinBlocks = minBlocks
-    // Dynamic adjustment: ensure total repeated content meets minimum length requirement
-    if (period * adjustedMinBlocks < minRepeatedLength) {
-      const requiredForCoverage = Math.ceil(minRepeatedLength / period)
-      // Only adjust if the new threshold is still achievable given text length
-      if (adjustedMinBlocks < requiredForCoverage && period * requiredForCoverage <= text.length) {
-        adjustedMinBlocks = requiredForCoverage
-      }
-    }
-
-    let consecutiveCount = 0
-    let scanEnd: number
-    const kTotal = Math.floor(text.length / period)
-    scanEnd = kTotal * period - 2 * period
-    for (let i = scanEnd; i >= period && i <= text.length - period; i -= period) {
-      if (text.slice(i - period, i) !== text.slice(i, i + period)) break
-      consecutiveCount++
-    }
-
-    if (consecutiveCount >= adjustedMinBlocks - 1) return true
-  }
-
-  return false
 }
 
 type StreamEvent = Event
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") { }
+export class Service extends Context.Service<Service, Interface>()("@opencode/SessionProcessor") {}
 
 export const layer: Layer.Layer<
   Service,
@@ -168,8 +127,6 @@ export const layer: Layer.Layer<
         blocked: false,
         needsCompaction: false,
         currentText: undefined,
-        tokensSinceLastCheck: 0,
-        reasoningTokensSinceLastCheck: 0,
         reasoningMap: {},
       }
       let aborted = false
@@ -289,27 +246,9 @@ export const layer: Layer.Layer<
             yield* session.updatePart(ctx.reasoningMap[value.id])
             return
 
-          case "reasoning-delta": {
+          case "reasoning-delta":
             if (!(value.id in ctx.reasoningMap)) return
             ctx.reasoningMap[value.id].text += value.text
-
-            // Check for repetition in accumulated reasoning text.
-            if (ctx.reasoningMap[value.id]?.text.length > MIN_TEXT_LENGTH) {
-              const cfg = yield* config.get()
-
-              if (shouldRunRepetitionCheck(ctx, value.text.length)) {
-                const reasoningText = ctx.reasoningMap[value.id]?.text
-                if (reasoningText && detectRepeatingPattern(
-                  reasoningText,
-                  cfg.experimental?.text_repetition_min_blocks ?? 3,
-                  cfg.experimental?.text_repetition_min_repeated_length ?? 2000
-                )) {
-                  ctx.blocked = true
-                  return
-                }
-              }
-            }
-
             if (value.providerMetadata) ctx.reasoningMap[value.id].metadata = value.providerMetadata
             yield* session.updatePartDelta({
               sessionID: ctx.reasoningMap[value.id].sessionID,
@@ -319,7 +258,6 @@ export const layer: Layer.Layer<
               delta: value.text,
             })
             return
-          }
 
           case "reasoning-end":
             if (!(value.id in ctx.reasoningMap)) return
@@ -617,16 +555,13 @@ export const layer: Layer.Layer<
               time: { start: Date.now() },
               metadata: value.providerMetadata,
             }
-            ctx.tokensSinceLastCheck = 0
             yield* session.updatePart(ctx.currentText)
             return
 
-          case "text-delta": {
+          case "text-delta":
             if (!ctx.currentText) return
             ctx.currentText.text += value.text
-
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
-
             yield* session.updatePartDelta({
               sessionID: ctx.currentText.sessionID,
               messageID: ctx.currentText.messageID,
@@ -634,23 +569,7 @@ export const layer: Layer.Layer<
               field: "text",
               delta: value.text,
             })
-
-            // Check for repetition in the accumulated text. Use all of currentText as input to detect patterns extending to end.
-            if (shouldRunRepetitionCheck(ctx, value.text.length)) {
-              const cfg = yield* config.get()
-              const isRepeating = detectRepeatingPattern(
-                ctx.currentText!.text,
-                cfg.experimental?.text_repetition_min_blocks ?? 3,
-                cfg.experimental?.text_repetition_min_repeated_length ?? 2000
-              )
-              if (isRepeating) {
-                ctx.blocked = true
-                return
-              }
-            }
-
             return
-          }
 
           case "text-end":
             if (!ctx.currentText) return
